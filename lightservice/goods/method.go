@@ -1,0 +1,25 @@
+package goods
+
+const (
+	METHOD_SHOP_LIST_GET           string = "shop.list.get"
+	METHOD_SKU_PRICE_UPDATE               = "sku.price.update"
+	METHOD_SKU_STOCK_UPDATE               = "sku.stock.update"
+	METHOD_SPU_ITEM_BASE_UPDATE           = "spu.item.base.update"
+	METHOD_SPU_ITEM_CONTENT_UPDATE        = "spu.item.content.update"
+	METHOD_SPU_ITEM_COUNT                 = "spu.item.count"
+	METHOD_SPU_ITEM_DELETE                = "spu.item.delete"
+	METHOD_SPU_ITEM_DELISTING             = "spu.item.delisting"
+	METHOD_SPU_ITEM_GET                   = "spu.item.get"
+	METHOD_SPU_ITEM_IMAGES_UPDATE         = "spu.item.images.update"
+	METHOD_SPU_ITEM_LIST                  = "spu.item.list"
+	METHOD_SPU_ITEM_LISTING               = "spu.item.listing"
+	METHOD_SPU_ITEM_PRICE_UPDATE          = "spu.item.price.update"
+	METHOD_SPU_ITEM_SAVE                  = "spu.item.save"
+	METHOD_SPU_ITEM_STOCK_UPDATE          = "spu.item.stock.update"
+	METHOD_SPU_ITEM_TAGS_UPDATE           = "spu.item.tags.update"
+	METHOD_SPU_SCHEMA_GET                 = "spu.schema.get"
+	METHOD_TAG_ITEM_ADD                   = "tag.item.add"
+	METHOD_TAG_ITEM_DELETE                = "tag.item.delete"
+	METHOD_TAG_ITEM_UPDATE                = "tag.item.update"
+	METHOD_TAG_LIST_GET                   = "tag.list.get"
+)

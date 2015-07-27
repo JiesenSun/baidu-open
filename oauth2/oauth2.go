@@ -19,18 +19,20 @@ func SetOauthServerUrl(urlStr string) {
 	OAUTH_SERVER_URL = urlStr
 }
 
-type Oauth2Type struct {
-	AppId       int
-	ApiKey      string
-	SecretKey   string
-	Scope       []string
-	GrantType   string
-	AccessToken *AccessTokenType
-	HttpClient  *http.Client
+type AppInfo struct {
+	AppId       int                    `json:"appid"`
+	ApiKey      string                 `json:"api_key"`
+	SecretKey   string                 `json:"secret_key"`
+	Scope       []string               `json:"scope"`
+	GrantType   string                 `json:"-"`
+	AccessToken *AccessTokenType       `json:"token"`
+	HttpClient  *http.Client           `json:"-"`
+	ConfigPath  string                 `json:"-"`
+	Attrs       map[string]interface{} `json:"attrs"`
 }
 
-func NewOauth2(appid int, apiKey string, secretKey string) *Oauth2Type {
-	return &Oauth2Type{
+func NewApp(appid int, apiKey string, secretKey string) *AppInfo {
+	return &AppInfo{
 		AppId:     appid,
 		ApiKey:    apiKey,
 		SecretKey: secretKey,
@@ -39,8 +41,25 @@ func NewOauth2(appid int, apiKey string, secretKey string) *Oauth2Type {
 	}
 }
 
+func NewAppByJsonFile(jsonPath string) (*AppInfo, error) {
+	bs, err := ioutil.ReadFile(jsonPath)
+	if err != nil {
+		glog.Warningf("read jsonFile[%s] failed,err:%s", jsonPath, err.Error())
+		return nil, err
+	}
+	var at *AppInfo
+	err = json.Unmarshal(bs, &at)
+	if err != nil {
+		glog.Warningf("json decode jsonFile[%s] failed,err:%s", jsonPath, err.Error())
+		return nil, err
+	}
+	at.GrantType = "client_credentials"
+	at.ConfigPath = jsonPath
+	return at, nil
+}
+
 type AccessTokenType struct {
-	TokenGetTime  time.Time `json:"-"`
+	TokenGetTime  time.Time `json:"token_get_time"`
 	AccessToken   string    `json:"access_token"`
 	ExpiresIn     int64     `json:"expires_in"`
 	RefreshToken  string    `json:"refresh_token"`
@@ -49,14 +68,21 @@ type AccessTokenType struct {
 	SessionSecret string    `json:"session_secret"`
 }
 
-func (p *Oauth2Type) AddScope(scope string) {
+func (p *AppInfo) AddScope(scope string) {
 	p.Scope = append(p.Scope, scope)
 }
 
-func (p *Oauth2Type) GetNewAccessToken() (*AccessTokenType, error) {
-
+func (p *AppInfo) GetNewAccessToken() (*AccessTokenType, error) {
 	glog.V(2).Infoln("GetNewAccessToken start")
 	defer glog.V(2).Infoln("GetNewAccessToken finish")
+
+	if p.AccessToken != nil && p.AccessToken.ExpiresIn > 100 {
+		life := time.Now().Sub(p.AccessToken.TokenGetTime).Seconds()
+		if life < float64(p.AccessToken.ExpiresIn) {
+			glog.V(2).Infoln("access_token is not expired,life:", life)
+			return p.AccessToken, nil
+		}
+	}
 
 	glog.V(2).Infoln("server_url:", OAUTH_SERVER_URL)
 
@@ -91,7 +117,7 @@ func (p *Oauth2Type) GetNewAccessToken() (*AccessTokenType, error) {
 		glog.Warningln("read response failed:", err)
 		return nil, err
 	}
-	glog.V(2).Info("response:",string(dataBs))
+	glog.V(2).Info("response:", string(dataBs))
 	var token *AccessTokenType
 	err = json.Unmarshal(dataBs, &token)
 	if err != nil {
@@ -99,10 +125,11 @@ func (p *Oauth2Type) GetNewAccessToken() (*AccessTokenType, error) {
 	}
 	token.TokenGetTime = time.Now()
 	p.AccessToken = token
-	return token, nil
+	err = p.Save2File()
+	return token, err
 }
 
-func (p *Oauth2Type) GetAccessToken() (*AccessTokenType, error) {
+func (p *AppInfo) GetAccessToken() (*AccessTokenType, error) {
 	if p.AccessToken == nil {
 		return p.GetNewAccessToken()
 	}
@@ -113,12 +140,20 @@ func (p *Oauth2Type) GetAccessToken() (*AccessTokenType, error) {
 	return p.AccessToken, nil
 }
 
-func (p *Oauth2Type) RefreshAccessToken() (*AccessTokenType, error) {
+func (p *AppInfo) RefreshAccessToken() (*AccessTokenType, error) {
 	return p.GetNewAccessToken()
 }
 
+func (p *AppInfo) Save2File() error {
+	if p.ConfigPath == "" {
+		return nil
+	}
+	bs, _ := json.MarshalIndent(p, "", "  ")
+	return ioutil.WriteFile(p.ConfigPath, bs, 0644)
+}
+
 func (token *AccessTokenType) String() string {
-	bs, err := json.Marshal(token)
+	bs, err := json.MarshalIndent(token, "", "  ")
 	if err != nil {
 		log.Println("encoding faild:", err)
 		return ""
