@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/golang/glog"
 	"github.com/hidu/baidu-open/oauth2"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"time"
@@ -18,10 +17,11 @@ func SetApiUrl(urlStr string) {
 	API_URL = urlStr
 }
 
-type Request struct {
+type Api struct {
 	Method string
 	Data   []interface{}
 	Type   string
+	app    *oauth2.AppInfo
 }
 
 type Response struct {
@@ -29,6 +29,7 @@ type Response struct {
 	ErrorCode int           `json:"error_code"`
 	ErrorMsg  string        `json:"error_msg"`
 	Data      []interface{} `json:"data"`
+	RequestID string        `json:"request_id"`
 }
 
 func (grt *Response) String() string {
@@ -39,71 +40,41 @@ func (grt *Response) String() string {
 	return string(bs)
 }
 
-func NewRequest(method string) *Request {
-	greq := &Request{
+func NewApi(app *oauth2.AppInfo, method string) *Api {
+	greq := &Api{
 		Method: method,
 		Data:   make([]interface{}, 0),
+		app:    app,
 	}
 	return greq
 }
 
-func (greq *Request) AddData(dataItem interface{}) {
+func (greq *Api) AddData(dataItem interface{}) {
 	greq.Data = append(greq.Data, dataItem)
 }
 
-func (greq *Request) SetData(data interface{}) {
+func (greq *Api) SetData(data interface{}) {
 	greq.Data = data.([]interface{})
 }
 
-func (greq *Request) SetType(mytype string) {
+func (greq *Api) SetType(mytype string) {
 	greq.Type = mytype
 }
 
-type Api struct {
-	appInfo    *oauth2.AppInfo
-	HttpClient *http.Client
-}
+func (api *Api) BuildRequest() (*http.Request, error) {
 
-func NewApi(appInfo *oauth2.AppInfo) (*Api, error) {
-	_, err := appInfo.GetAccessToken()
-	if err != nil {
-		return nil, err
-	}
-	api := &Api{
-		appInfo: appInfo,
-	}
-	return api, nil
-}
-
-func (api *Api) CallApi(req *Request) (*Response, error) {
-	glog.V(2).Infoln("CallApi start:", req.Method)
-	defer glog.V(2).Infoln("CallApi finish:", req.Method)
-
-	if api.appInfo == nil {
-		return nil, fmt.Errorf("no access_token")
-	}
-	token, err := api.appInfo.GetAccessToken()
-	if err != nil {
-		return nil, err
-	}
 	vs := make(url.Values)
-	vs.Add("method_name", req.Method)
+	vs.Add("method_name", api.Method)
 
-	bs, err := json.Marshal(req.Data)
+	bs, err := json.Marshal(api.Data)
 	if err != nil {
 		return nil, err
 	}
 	vs.Add("data", string(bs))
 	vs.Add("time", fmt.Sprintf("%d", time.Now().Unix()))
-	if req.Type != "" {
-		vs.Add("type", req.Type)
+	if api.Type != "" {
+		vs.Add("type", api.Type)
 	}
-
-	client := api.HttpClient
-	if client == nil {
-		client = &http.Client{}
-	}
-	vs.Add("access_token", token.AccessToken)
 	qs := vs.Encode()
 
 	glog.V(2).Infoln("goods_api_url:", API_URL)
@@ -111,32 +82,21 @@ func (api *Api) CallApi(req *Request) (*Response, error) {
 
 	http_req, err := http.NewRequest("POST", API_URL, bytes.NewBufferString(qs))
 	if err != nil {
-		glog.Warningln("build request failed:", err)
+		glog.Warningln("build ApiRequest failed:", err)
 		return nil, err
 	}
 
-	resp, err := client.Do(http_req)
+	return http_req, err
+}
+
+func (api *Api) Execute() (resp *Response, err error) {
+	if api.app == nil {
+		return nil, fmt.Errorf("no app info")
+	}
+	req, err := api.BuildRequest()
 	if err != nil {
-		glog.Warningln("send request failed:", err)
 		return nil, err
 	}
-	glog.V(2).Infoln("resp status:", resp.Status)
-
-	defer resp.Body.Close()
-	rbs, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		glog.Warningln("read response failed:", err)
-		return nil, err
-	}
-	glog.V(2).Infoln("response:", string(rbs))
-
-	var respType *Response
-	err = json.Unmarshal(rbs, &respType)
-	if err != nil {
-		glog.Warningln("json decode response failed:", err, "response:", string(bs))
-		return nil, fmt.Errorf("%s,resp:%s", err, string(bs))
-	}
-	respType.RespRaw = string(rbs)
-	return respType, nil
-
+	err = api.app.ExecuteApi(req, &resp)
+	return resp, err
 }

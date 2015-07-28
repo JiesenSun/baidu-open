@@ -8,12 +8,16 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
 var OAUTH_SERVER_URL string = "https://openapi.baidu.com/oauth/2.0/token"
+
+const SYS_ERROR_CODE_110 string = `"error_code":110`
 
 func SetOauthServerUrl(urlStr string) {
 	OAUTH_SERVER_URL = urlStr
@@ -29,15 +33,23 @@ type AppInfo struct {
 	HttpClient  *http.Client           `json:"-"`
 	ConfigPath  string                 `json:"-"`
 	Attrs       map[string]interface{} `json:"attrs"`
+	mu          sync.RWMutex
+}
+
+type SysResponse struct {
+	RespRaw   string `json:"-"`
+	ErrorCode int    `json:"error_code"`
+	ErrorMsg  string `json:"error_msg"`
 }
 
 func NewApp(appid int, apiKey string, secretKey string) *AppInfo {
 	return &AppInfo{
-		AppId:     appid,
-		ApiKey:    apiKey,
-		SecretKey: secretKey,
-		GrantType: "client_credentials",
-		Scope:     make([]string, 0),
+		AppId:      appid,
+		ApiKey:     apiKey,
+		SecretKey:  secretKey,
+		GrantType:  "client_credentials",
+		Scope:      make([]string, 0),
+		HttpClient: http.DefaultClient,
 	}
 }
 
@@ -55,6 +67,7 @@ func NewAppByJsonFile(jsonPath string) (*AppInfo, error) {
 	}
 	at.GrantType = "client_credentials"
 	at.ConfigPath = jsonPath
+	at.HttpClient = http.DefaultClient
 	return at, nil
 }
 
@@ -73,16 +86,11 @@ func (p *AppInfo) AddScope(scope string) {
 }
 
 func (p *AppInfo) GetNewAccessToken() (*AccessTokenType, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	glog.V(2).Infoln("GetNewAccessToken start")
 	defer glog.V(2).Infoln("GetNewAccessToken finish")
-
-	if p.AccessToken != nil && p.AccessToken.ExpiresIn > 100 {
-		life := time.Now().Sub(p.AccessToken.TokenGetTime).Seconds()
-		if life < float64(p.AccessToken.ExpiresIn) {
-			glog.V(2).Infoln("access_token is not expired,life:", life)
-			return p.AccessToken, nil
-		}
-	}
 
 	glog.V(2).Infoln("server_url:", OAUTH_SERVER_URL)
 
@@ -101,11 +109,13 @@ func (p *AppInfo) GetNewAccessToken() (*AccessTokenType, error) {
 		glog.Warningln("build request failed:", err)
 		return nil, err
 	}
-	client := p.HttpClient
-	if client == nil {
-		client = &http.Client{}
+
+	if glog.V(2) {
+		dump, _ := httputil.DumpRequest(req, true)
+		glog.Infoln("request_dump,", string(dump))
 	}
-	resp, err := client.Do(req)
+
+	resp, err := p.HttpClient.Do(req)
 	if err != nil {
 		glog.Warningln("send request failed:", err)
 		return nil, err
@@ -130,7 +140,7 @@ func (p *AppInfo) GetNewAccessToken() (*AccessTokenType, error) {
 }
 
 func (p *AppInfo) GetAccessToken() (*AccessTokenType, error) {
-	if p.AccessToken == nil {
+	if p.AccessToken == nil || p.AccessToken.ExpiresIn < 100 {
 		return p.GetNewAccessToken()
 	}
 
@@ -159,4 +169,77 @@ func (token *AccessTokenType) String() string {
 		return ""
 	}
 	return string(bs)
+}
+
+func (p *AppInfo) CleanAccessToken() {
+	p.AccessToken = nil
+	p.Save2File()
+}
+
+func (p *AppInfo) ExecuteApi(req *http.Request, res interface{}) error {
+	apiUrl := req.URL.String()
+	glog.V(2).Infoln("CallApi start:", apiUrl)
+	defer glog.V(2).Infoln("CallApi finish:", apiUrl)
+
+	tryTimes := 0
+
+callApi:
+	tryTimes++
+	if tryTimes > 1 {
+		return fmt.Errorf("out off tryTimes")
+	}
+
+	token, err := p.GetAccessToken()
+	if err != nil {
+		return err
+	}
+	var urlNew string
+	if req.URL.RawQuery == "" {
+		urlNew = apiUrl + "?access_token=" + token.AccessToken
+	} else {
+		urlNew = apiUrl + "&access_token=" + token.AccessToken
+	}
+	req.URL, err = req.URL.Parse(urlNew)
+	if err != nil {
+		return err
+	}
+
+	if glog.V(2) {
+		dump, _ := httputil.DumpRequest(req, true)
+		glog.Infoln("request_dump\n", string(dump))
+	}
+
+	resp, err := p.HttpClient.Do(req)
+	if err != nil {
+		glog.Warningln("send request failed:", err)
+		return err
+	}
+	glog.V(2).Infoln("resp status:", resp.Status)
+
+	defer resp.Body.Close()
+	rbs, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		glog.Warningln("read response failed:", err)
+		return err
+	}
+	glog.V(2).Infoln("response:", string(rbs))
+
+	if bytes.Contains(rbs, []byte(SYS_ERROR_CODE_110)) {
+		glog.V(2).Infoln("access_token error,retry,response:", string(rbs))
+		p.CleanAccessToken()
+		_, err := p.GetNewAccessToken()
+		if err != nil {
+			glog.Warningln()
+			return err
+		}
+		goto callApi
+	}
+
+	err = json.Unmarshal(rbs, &res)
+	if err != nil {
+		glog.Warningln("json decode response failed:", err, "response:", string(rbs))
+		return fmt.Errorf("%s,resp:%s", err, string(rbs))
+	}
+
+	return nil
 }
